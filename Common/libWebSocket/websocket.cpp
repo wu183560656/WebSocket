@@ -1,6 +1,7 @@
 #include <ixwebsocket/IXWebSocket.h>
 #include <ixwebsocket/IXNetSystem.h>
 #include <ixwebsocket/IXWebSocketServer.h>
+#include <Common/jsoncpp/include/json/json.h>
 #include <semaphore>
 #include <combaseapi.h>
 #include "websocket.h"
@@ -137,6 +138,7 @@ namespace websocket
 	}
 	void ISocket::OnMessage(const std::string& message, const std::function<bool(const std::string& text)>& send)
 	{
+		g_log_func("Received message: " + message);
 		Json::Value root = StringToJson(message);
 		if(root.isNull())
 		{
@@ -192,6 +194,7 @@ namespace websocket
 					response_root["type"] = "response";
 					response_root["body"] = response_body;
 					std::string send_msg = JsonToString(response_root);
+					g_log_func("Sending response for function " + name + ": " + send_msg);
 					send(send_msg);
 				});
 			}
@@ -254,6 +257,7 @@ namespace websocket
 		: _getHelloData(getHelloData), _onDisconnect(onDisconnect)
 		, _socket(new ix::WebSocket())
 	{
+		_socket->setUrl(url);
 		_socket->setOnMessageCallback([this](const ix::WebSocketMessagePtr& msg) {
 			switch (msg->type)
 			{
@@ -265,8 +269,11 @@ namespace websocket
 					hello_data = this->_getHelloData();
 				}
 				Json::Value root;
-				root["type"] = "hello";
-				root["body"] = hello_data;
+				Json::Value body;
+				root["type"] = "event";
+				body["name"] = "hello";
+				body["param"] = hello_data;
+				root["body"] = body;
 				this->_socket->sendUtf8Text(JsonToString(root));
 			}
 			break;
@@ -342,7 +349,9 @@ namespace websocket
 		body["name"] = name;
 		body["param"] = param;
 		root["body"] = body;
-		return _socket->sendUtf8Text(JsonToString(root)).success;
+		std::string msg = JsonToString(root);
+		g_log_func("Sending event: " + msg);
+		return _socket->sendUtf8Text(msg).success;
 	}
 
 	Server::Server(unsigned short port, const std::function<std::string(const std::string& url)>& onConnect, const std::function<void(const std::string& clientId)>& onDisconnect)

@@ -1,5 +1,4 @@
 #pragma once
-#include <Common/jsoncpp/include/json/json.h>
 #include <functional>
 #include <map>
 #include <mutex>
@@ -8,6 +7,10 @@ namespace ix
 {
 	class WebSocket;
 	class WebSocketServer;
+}
+namespace Json
+{
+	class Value;
 }
 namespace websocket
 {
