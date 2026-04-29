@@ -160,7 +160,13 @@ namespace ix
                 return std::make_pair(false, ss.str());
             }
         }
-
+        // 在 bind/listen 成功后
+        struct sockaddr_in addr;
+        int len = sizeof(addr);
+        if (getsockname(_serverFd, (struct sockaddr*)&addr, &len) == 0)
+        {
+            _port = ntohs(addr.sin_port);
+        }
         //
         // Listen for connections. Specify the tcp backlog.
         //

@@ -24,8 +24,6 @@ namespace websocket
 	public:
 		ISocket();
 		virtual ~ISocket();
-		void RegisterFunction(const std::string& name, const std::function<void(const Json::Value& param, const std::function<void(bool success, const std::string& message, const Json::Value& data)>& callback)>& func);
-		void RegisterEvent(const std::string& name, const std::function<void(const Json::Value& param)>& proc);
 	protected:
 		class PendingCall
 		{
@@ -37,12 +35,9 @@ namespace websocket
 			unsigned __int64 _timeout;
 			std::function<void(bool success, const std::string& message, const Json::Value& data)> _callback;
 		};
-		void OnMessage(const std::string& message, const std::function<bool(const std::string& text)>& send);
 		std::string AppendPendingCall(const std::function<void(bool success, const std::string& message, const Json::Value& data)>& callback);
 		void InvokePendingCall(const std::string& id, bool success, const std::string& message, const Json::Value& data);
-	private:
-		std::map<std::string, std::function<void(const Json::Value& param, const std::function<void(bool success, const std::string& message, const Json::Value& data)>& callback)>> _functions;
-		std::map<std::string, std::function<void(const Json::Value& param)>> _events;
+	protected:
 		// 待处理调用列表
 		std::thread* _pending_calls_cleaner_thread;
 		bool _stop_pending_calls_cleaner_thread;
@@ -55,6 +50,10 @@ namespace websocket
 	public:
 		Client(const std::string& url, const std::function<Json::Value()>& getHelloData, const std::function<void(Client& client)>& onDisconnect);
 		virtual ~Client();
+		void RegisterFunction(const std::string& name, const std::function<void(const Json::Value& param, const std::function<void(bool success, const std::string& message, const Json::Value& data)>& callback)>& func);
+		void RegisterEvent(const std::string& name, const std::function<void(const Json::Value& param)>& proc);
+		void SetUndefinedFunctionHandler(const std::function<void(const std::string& name, const Json::Value& param, const std::function<void(bool success, const std::string& message, const Json::Value& data)>& callback)>& handler);
+		void SetUndefinedEventHandler(const std::function<void(const std::string& name, const Json::Value& param)>& handler);
 		void Connect();
 		void Disconnect();
 		bool IsConnected();
@@ -64,6 +63,10 @@ namespace websocket
 		ix::WebSocket* _socket;
 		std::function<Json::Value()> _getHelloData;
 		std::function<void(Client& client)> _onDisconnect;
+		std::map<std::string, std::function<void(const Json::Value& param, const std::function<void(bool success, const std::string& message, const Json::Value& data)>& callback)>> _functions;
+		std::map<std::string, std::function<void(const Json::Value& param)>> _events;
+		std::function<void(const std::string& name, const Json::Value& param, const std::function<void(bool success, const std::string& message, const Json::Value& data)>& callback)> _undefinedFunctionHandler;
+		std::function<void(const std::string& name, const Json::Value& param)> _undefinedEventHandler;
 	};
 	// 服务端
 	class Server :public ISocket
@@ -71,8 +74,13 @@ namespace websocket
 	public:
 		Server(unsigned short port, const std::function<std::string(const std::string& url)>& onConnect, const std::function<void(const std::string& clientId)>& onDisconnect);
 		virtual ~Server();
+		void RegisterFunction(const std::string& name, const std::function<void(const std::string& clientId, const Json::Value& param, const std::function<void(bool success, const std::string& message, const Json::Value& data)>& callback)>& func);
+		void RegisterEvent(const std::string& name, const std::function<void(const std::string& clientId, const Json::Value& param)>& proc);
+		void SetUndefinedFunctionHandler(const std::function<void(const std::string& name,const std::string& clientId, const Json::Value& param, const std::function<void(bool success, const std::string& message, const Json::Value& data)>& callback)>& handler);
+		void SetUndefinedEventHandler(const std::function<void(const std::string& name,const std::string& clientId, const Json::Value& param)>& handler);
 		bool Start();
 		void Stop();
+		int GetPort();
 		void DisconnectClient(const std::string& clientId);
 		void InvokeFunction(const std::string& clientId, const std::string& name, const Json::Value& param, const std::function<void(bool success, const std::string& message, const Json::Value& data)>& callback);
 		bool SendEvent(const std::string& clientId, const std::string& name, const Json::Value& param);
@@ -83,6 +91,10 @@ namespace websocket
 		std::mutex _clients_mutex;
 		std::function<std::string(const std::string& url)> _onConnect;
 		std::function<void(const std::string& clientId)> _onDisconnect;
+		std::map<std::string, std::function<void(const std::string clientId, const Json::Value& param, const std::function<void(bool success, const std::string& message, const Json::Value& data)>& callback)>> _functions;
+		std::map<std::string, std::function<void(const std::string clientId, const Json::Value& param)>> _events;
+		std::function<void(const std::string& name, const std::string& clientId, const Json::Value& param, const std::function<void(bool success, const std::string& message, const Json::Value& data)>& callback)> _undefinedFunctionHandler;
+		std::function<void(const std::string& name, const std::string& clientId, const Json::Value& param)> _undefinedEventHandler;
 	};
 };
 

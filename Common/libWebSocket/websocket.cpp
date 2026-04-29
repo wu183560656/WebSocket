@@ -128,95 +128,6 @@ namespace websocket
 		_pending_calls_cleaner_thread->join();
 		delete _pending_calls_cleaner_thread;
 	}
-	void ISocket::RegisterFunction(const std::string& name, const std::function<void(const Json::Value& param, const std::function<void(bool success, const std::string& message, const Json::Value& data)>& callback)>& func)
-	{
-		_functions[name] = func;
-	}
-	void ISocket::RegisterEvent(const std::string& name, const std::function<void(const Json::Value& param)>& proc)
-	{
-		_events[name] = proc;
-	}
-	void ISocket::OnMessage(const std::string& message, const std::function<bool(const std::string& text)>& send)
-	{
-		g_log_func("Received message: " + message);
-		Json::Value root = StringToJson(message);
-		if(root.isNull())
-		{
-			g_log_func("Message is null");
-			return;
-		}
-		std::string type = root["type"].asString();
-		Json::Value body = root["body"];
-		if (body.isNull())
-		{
-			g_log_func("Message body is null");
-			return;
-		}
-		// 根据消息类型处理事件或函数调用
-		if (type == "event")
-		{
-			// 触发事件回调
-			std::string name = body["name"].asString();
-			auto iter = _events.find(name);
-			if (iter != _events.end())
-			{
-				iter->second(body["param"]);
-			}
-			return;
-		}
-		else if (type == "invoke")
-		{
-			// 调用注册的函数并发送响应
-			std::string name = body["name"].asString();
-			std::string id = body["id"].asString();
-			auto iter = _functions.find(name);
-			if (iter == _functions.end())
-			{
-				Json::Value response_body;
-				response_body["id"] = id;
-				response_body["success"] = false;
-				response_body["message"] = (const char*)u8"函数不存在";
-				Json::Value response_root;
-				response_root["type"] = "response";
-				response_root["body"] = response_body;
-				std::string send_msg = JsonToString(response_root);
-				send(send_msg);
-			}
-			else
-			{
-				iter->second(body["param"], [name, id, send](bool success, const std::string& message, const Json::Value& data) {
-					Json::Value response_body;
-					response_body["id"] = id;
-					response_body["success"] = success;
-					response_body["message"] = message;
-					response_body["data"] = data;
-					Json::Value response_root;
-					response_root["type"] = "response";
-					response_root["body"] = response_body;
-					std::string send_msg = JsonToString(response_root);
-					g_log_func("Sending response for function " + name + ": " + send_msg);
-					send(send_msg);
-				});
-			}
-			return;
-		}
-		else if (type == "response")
-		{
-			// 处理函数调用的响应
-			std::string id = body["id"].asString();
-			bool success = body["success"].asBool();
-			std::string message = body["message"].asString();
-			Json::Value data = body["data"];
-			// 通过id找到对应的回调函数并调用
-			InvokePendingCall(id, success, message, data);
-			return;
-		}
-		else
-		{
-			g_log_func("Unknown message type: " + type);
-			return;
-		}
-	}
 
 	std::string ISocket::AppendPendingCall(const std::function<void(bool success, const std::string& message, const Json::Value& data)>& callback)
 	{
@@ -256,6 +167,7 @@ namespace websocket
 	Client::Client(const std::string& url, const std::function<Json::Value()>& getHelloData, const std::function<void(Client& client)>& onDisconnect)
 		: _getHelloData(getHelloData), _onDisconnect(onDisconnect)
 		, _socket(new ix::WebSocket())
+		, _undefinedFunctionHandler(nullptr), _undefinedEventHandler(nullptr)
 	{
 		_socket->setUrl(url);
 		_socket->setOnMessageCallback([this](const ix::WebSocketMessagePtr& msg) {
@@ -279,9 +191,81 @@ namespace websocket
 			break;
 			case ix::WebSocketMessageType::Message:
 			{
-				this->OnMessage(msg->str, [this](const std::string& response_msg) {
-					return this->_socket->sendUtf8Text(response_msg).success;
-				});
+				g_log_func("Received message: " + msg->str);
+				Json::Value root = StringToJson(msg->str);
+				if (root.isNull())
+				{
+					g_log_func("Message is null");
+					return;
+				}
+				std::string type = root["type"].asString();
+				Json::Value body = root["body"];
+				if (body.isNull())
+				{
+					g_log_func("Message body is null");
+					return;
+				}
+				// 根据消息类型处理事件或函数调用
+				if (type == "event")
+				{
+					// 触发事件回调
+					std::string name = body["name"].asString();
+					auto iter = _events.find(name);
+					if (iter != _events.end())
+					{
+						iter->second(body["param"]);
+					}
+					return;
+				}
+				else if (type == "invoke")
+				{
+					// 调用注册的函数并发送响应
+					std::string name = body["name"].asString();
+					std::string id = body["id"].asString();
+					auto callback = [name, id, this](bool success, const std::string& message, const Json::Value& data) {
+						Json::Value response_body;
+						response_body["id"] = id;
+						response_body["success"] = success;
+						response_body["message"] = message;
+						response_body["data"] = data;
+						Json::Value response_root;
+						response_root["type"] = "response";
+						response_root["body"] = response_body;
+						std::string send_msg = JsonToString(response_root);
+						g_log_func("Sending response for function " + name + ": " + send_msg);
+						this->_socket->sendUtf8Text(send_msg);
+					};
+					auto iter = _functions.find(name);
+					if (iter != _functions.end())
+					{
+						iter->second(body["param"], callback);
+					}
+					else if (!_undefinedFunctionHandler)
+					{
+						callback(false, (const char*)u8"函数不存在", Json::Value());
+					}
+					else
+					{
+						_undefinedFunctionHandler(name, body["param"], callback);
+					}
+					return;
+				}
+				else if (type == "response")
+				{
+					// 处理函数调用的响应
+					std::string id = body["id"].asString();
+					bool success = body["success"].asBool();
+					std::string message = body["message"].asString();
+					Json::Value data = body["data"];
+					// 通过id找到对应的回调函数并调用
+					InvokePendingCall(id, success, message, data);
+					return;
+				}
+				else
+				{
+					g_log_func("Unknown message type: " + type);
+					return;
+				}
 			}
 			break;
 			case ix::WebSocketMessageType::Close:
@@ -302,6 +286,22 @@ namespace websocket
 	{
 		Disconnect();
 		delete _socket;
+	}
+	void Client::RegisterFunction(const std::string& name, const std::function<void(const Json::Value& param, const std::function<void(bool success, const std::string& message, const Json::Value& data)>& callback)>& func)
+	{
+		_functions[name] = func;
+	}
+	void Client::RegisterEvent(const std::string& name, const std::function<void(const Json::Value& param)>& proc)
+	{
+		_events[name] = proc;
+	}
+	void Client::SetUndefinedFunctionHandler(const std::function<void(const std::string& name, const Json::Value& param, const std::function<void(bool success, const std::string& message, const Json::Value& data)>& callback)>& handler)
+	{
+		_undefinedFunctionHandler = handler;
+	}
+	void Client::SetUndefinedEventHandler(const std::function<void(const std::string& name, const Json::Value& param)>& handler)
+	{
+		_undefinedEventHandler = handler;
 	}
 	void Client::Connect()
 	{
@@ -353,7 +353,6 @@ namespace websocket
 		g_log_func("Sending event: " + msg);
 		return _socket->sendUtf8Text(msg).success;
 	}
-
 	Server::Server(unsigned short port, const std::function<std::string(const std::string& url)>& onConnect, const std::function<void(const std::string& clientId)>& onDisconnect)
 		: _onConnect(onConnect), _onDisconnect(onDisconnect)
 		, _server(new ix::WebSocketServer(port))
@@ -366,6 +365,7 @@ namespace websocket
 			std::string clientId = _onConnect(client->getUrl());
 			if (clientId.empty())
 			{
+				// 如果ID为空，说明不接受该连接，直接关闭连接并返回
 				client->close();
 				return;
 			}
@@ -380,9 +380,81 @@ namespace websocket
 				{
 				case ix::WebSocketMessageType::Message:
 				{
-					this->OnMessage(msg->str, [client](const std::string& response_msg) {
-						return client->send(response_msg).success;
-					});
+					g_log_func("Received message: " + msg->str);
+					Json::Value root = StringToJson(msg->str);
+					if (root.isNull())
+					{
+						g_log_func("Message is null");
+						return;
+					}
+					std::string type = root["type"].asString();
+					Json::Value body = root["body"];
+					if (body.isNull())
+					{
+						g_log_func("Message body is null");
+						return;
+					}
+					// 根据消息类型处理事件或函数调用
+					if (type == "event")
+					{
+						// 触发事件回调
+						std::string name = body["name"].asString();
+						auto iter = _events.find(name);
+						if (iter != _events.end())
+						{
+							iter->second(clientId, body["param"]);
+						}
+						return;
+					}
+					else if (type == "invoke")
+					{
+						// 调用注册的函数并发送响应
+						std::string name = body["name"].asString();
+						std::string id = body["id"].asString();
+						auto callback = [name, id, client](bool success, const std::string& message, const Json::Value& data) {
+							Json::Value response_body;
+							response_body["id"] = id;
+							response_body["success"] = success;
+							response_body["message"] = message;
+							response_body["data"] = data;
+							Json::Value response_root;
+							response_root["type"] = "response";
+							response_root["body"] = response_body;
+							std::string send_msg = JsonToString(response_root);
+							g_log_func("Sending response for function " + name + ": " + send_msg);
+							client->send(send_msg);
+						};
+						auto iter = _functions.find(name);
+						if (iter != _functions.end())
+						{
+							iter->second(clientId, body["param"], callback);
+						}
+						else if (!_undefinedFunctionHandler)
+						{
+							callback(false, (const char*)u8"函数不存在", Json::Value());
+						}
+						else
+						{
+							_undefinedFunctionHandler(name, clientId, body["param"], callback);
+						}
+						return;
+					}
+					else if (type == "response")
+					{
+						// 处理函数调用的响应
+						std::string id = body["id"].asString();
+						bool success = body["success"].asBool();
+						std::string message = body["message"].asString();
+						Json::Value data = body["data"];
+						// 通过id找到对应的回调函数并调用
+						InvokePendingCall(id, success, message, data);
+						return;
+					}
+					else
+					{
+						g_log_func("Unknown message type: " + type);
+						return;
+					}
 				}
 					break;
 				case ix::WebSocketMessageType::Close:
@@ -410,6 +482,22 @@ namespace websocket
 		Stop();
 		delete _server;;
 	}
+	void Server::RegisterFunction(const std::string& name, const std::function<void(const std::string& clientId, const Json::Value& param, const std::function<void(bool success, const std::string& message, const Json::Value& data)>& callback)>& func)
+	{
+		_functions[name] = func;
+	}
+	void Server::RegisterEvent(const std::string& name, const std::function<void(const std::string& clientId, const Json::Value& param)>& proc)
+	{
+		_events[name] = proc;
+	}
+	void Server::SetUndefinedFunctionHandler(const std::function<void(const std::string& name, const std::string& clientId, const Json::Value& param, const std::function<void(bool success, const std::string& message, const Json::Value& data)>& callback)>& handler)
+	{
+		_undefinedFunctionHandler = handler;
+	}
+	void Server::SetUndefinedEventHandler(const std::function<void(const std::string& name, const std::string& clientId, const Json::Value& param)>& handler)
+	{
+		_undefinedEventHandler = handler;
+	}
 	bool Server::Start()
 	{
 		return _server->listenAndStart();
@@ -417,6 +505,10 @@ namespace websocket
 	void Server::Stop()
 	{
 		_server->stop();
+	}
+	int Server::GetPort()
+	{
+		return _server->getPort();
 	}
 	void Server::DisconnectClient(const std::string& clientId)
 	{

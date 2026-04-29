@@ -1,6 +1,7 @@
 ﻿#pragma once
 #include <Common/libWebSocket/websocket.h>
 #include <Windows.h>
+#include <Common/jsoncpp/include/json/json.h>
 
 class WS
 {
