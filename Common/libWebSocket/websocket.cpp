@@ -182,7 +182,8 @@ namespace websocket
 			case ix::WebSocketMessageType::Open:
 			{
 				// 连接建立成功，记录当前时间
-				_last_received_message_time = GetTickCount64();
+				this->_last_received_message_time = GetTickCount64();
+				this->_last_send_ping_time = GetTickCount64();
 				// 连接建立成功，发送hello事件
 				Json::Value hello_data = Json::nullValue;
 				if(this->_getHelloData)
@@ -198,12 +199,22 @@ namespace websocket
 				this->_socket->sendUtf8Text(JsonToString(root));
 			}
 			break;
+			case ix::WebSocketMessageType::Close:
+			case ix::WebSocketMessageType::Error:
+			{
+				this->_last_received_message_time = 0;
+				this->_last_send_ping_time = 0;
+				if (this->_onDisconnect)
+				{
+					this->_onDisconnect(*this);
+				}
+			}
+			break;
 			case ix::WebSocketMessageType::Message:
 			{
 				g_log_func("Received message: " + msg->str);
 				// 收到消息，更新最后收到消息的时间
 				this->_last_received_message_time = GetTickCount64();
-				this->_last_send_ping_time = GetTickCount64();
 				Json::Value root = StringToJson(msg->str);
 				if (root.isNull())
 				{
@@ -293,15 +304,6 @@ namespace websocket
 				}
 			}
 			break;
-			case ix::WebSocketMessageType::Close:
-			case ix::WebSocketMessageType::Error:
-			{
-				if (this->_onDisconnect)
-				{
-					this->_onDisconnect(*this);
-				}
-			}
-			break;
 			default:
 				break;
 			}
@@ -380,18 +382,21 @@ namespace websocket
 	}
 	void Client::OtherHandleProc()
 	{
-		auto tc = GetTickCount64();
-		if (IsConnected() && tc - _last_send_ping_time > 30000)
+		if (IsConnected())
 		{
-			// 如果超过30秒没有发送ping消息，主动发送ping消息
-			_socket->sendUtf8Text(R"({"type":"ping"})");
-			_last_send_ping_time = tc;
-		}
-		if (tc - _last_received_message_time > 60000)
-		{
-			// 如果一分钟没收到消息了，说明可能连接已经断开了，主动断开连接
-			g_log_func("No message received for a long time, disconnecting...");
-			Disconnect();
+			auto tc = GetTickCount64();
+			if (tc - _last_send_ping_time > 30000)
+			{
+				// 如果超过30秒没有发送ping消息，主动发送ping消息
+				_socket->sendUtf8Text(R"({"type":"ping"})");
+				_last_send_ping_time = tc;
+			}
+			if (tc - _last_received_message_time > 60000)
+			{
+				// 如果一分钟没收到消息了，说明可能连接已经断开了，主动断开连接
+				g_log_func("No message received for a long time, disconnecting...");
+				Disconnect();
+			}
 		}
 	}
 	Server::Server(unsigned short port, const std::function<std::string(const std::string& url)>& onConnect, const std::function<void(const std::string& clientId)>& onDisconnect)
