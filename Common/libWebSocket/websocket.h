@@ -43,6 +43,8 @@ namespace websocket
 		bool _stop_pending_calls_cleaner_thread;
 		std::map<std::string, PendingCall> _pending_calls;
 		std::mutex _pending_calls_mutex;
+		// 其他处理函数，子类可以重写这个函数来处理一些特殊的消息，比如ping/pong等
+		virtual void OtherHandleProc();
 	};
 	// 客户端
 	class Client :public ISocket
@@ -59,8 +61,12 @@ namespace websocket
 		bool IsConnected();
 		void InvokeFunction(const std::string& name, const Json::Value& param, const std::function<void(bool success, const std::string& message, const Json::Value& data)>& callback);
 		bool SendEvent(const std::string& name, const Json::Value& param);
+	protected:
+		void OtherHandleProc() override;
 	private:
 		ix::WebSocket* _socket;
+		unsigned __int64 _last_received_message_time;
+		unsigned __int64 _last_send_ping_time;
 		std::function<Json::Value()> _getHelloData;
 		std::function<void(Client& client)> _onDisconnect;
 		std::map<std::string, std::function<void(const Json::Value& param, const std::function<void(bool success, const std::string& message, const Json::Value& data)>& callback)>> _functions;
